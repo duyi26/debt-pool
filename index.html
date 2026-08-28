@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#111827" />
+  <title>Debt Pool</title>
+  <style>
+    :root{
+      --bg:#f3f4f6;--card:#ffffff;--text:#111827;--muted:#6b7280;--line:#e5e7eb;
+      --good:#047857;--bad:#b91c1c;--accent:#111827;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+    .wrap{max-width:760px;margin:0 auto;padding:18px 14px 110px}
+    h1{font-size:28px;margin:6px 0 2px}.sub{color:var(--muted);font-size:13px;margin-bottom:16px}
+    .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+    .card{background:var(--card);border-radius:18px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+    .label{font-size:13px;color:var(--muted)}.value{font-size:25px;font-weight:700;margin-top:5px}.small{font-size:13px;color:var(--muted);margin-top:5px}
+    .wide{grid-column:1/-1}
+    .section{margin-top:14px}.section h2{font-size:16px;margin:0 0 8px;padding:0 2px}
+    .row{display:flex;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}.row:last-child{border-bottom:none}
+    .row-main{font-weight:600}.row-sub{font-size:12px;color:var(--muted);margin-top:3px}.amt{font-weight:700;white-space:nowrap}
+    .good{color:var(--good)}.bad{color:var(--bad)}
+    .empty{color:var(--muted);font-size:13px;padding:8px 0}
+    .fab{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);width:min(720px,calc(100% - 28px));display:flex;gap:10px}
+    button{border:0;border-radius:14px;padding:14px 16px;font-size:15px;font-weight:700;cursor:pointer}
+    .primary{flex:1;background:var(--accent);color:white}.secondary{background:white;color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+    dialog{width:min(700px,calc(100% - 24px));border:0;border-radius:20px;padding:0;box-shadow:0 20px 60px rgba(0,0,0,.2)}
+    dialog::backdrop{background:rgba(0,0,0,.35)}
+    .modal{padding:18px}.modal h3{margin:0 0 14px;font-size:20px}.fields{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .field{display:flex;flex-direction:column;gap:6px}.field label{font-size:12px;color:var(--muted)}
+    input,select{width:100%;border:1px solid var(--line);border-radius:12px;padding:12px;font-size:15px;background:white}
+    .full{grid-column:1/-1}.modal-actions{display:flex;gap:10px;margin-top:16px}.modal-actions button{flex:1}
+    .item-editor{border:1px solid var(--line);border-radius:14px;padding:12px;margin-top:10px}.danger{background:#fee2e2;color:#991b1b}
+    .hint{font-size:12px;color:var(--muted);margin-top:10px;line-height:1.5}
+    @media(max-width:520px){.grid{grid-template-columns:1fr 1fr}.value{font-size:22px}.fields{grid-template-columns:1fr}.full{grid-column:auto}}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Debt Pool</h1>
+  <div class="sub">现金流与债务调度 · 数据仅保存在当前浏览器</div>
+
+  <div class="grid">
+    <div class="card"><div class="label">当前现金</div><div class="value" id="cash">¥0</div></div>
+    <div class="card"><div class="label">总负债</div><div class="value" id="debt">¥0</div><div class="small" id="debtDelta">暂无上次快照</div></div>
+    <div class="card"><div class="label">未来30天收入</div><div class="value good" id="income30">¥0</div></div>
+    <div class="card"><div class="label">未来30天计划支出</div><div class="value bad" id="expense30">¥0</div></div>
+    <div class="card wide"><div class="label">未来30天最低现金余额</div><div class="value" id="minCash">¥0</div><div class="small" id="minCashInfo">暂无现金流事件</div></div>
+  </div>
+
+  <div class="section">
+    <h2>未来事项</h2>
+    <div class="card" id="events"></div>
+  </div>
+
+  <div class="section">
+    <h2>债务池</h2>
+    <div class="card" id="debts"></div>
+  </div>
+</div>
+
+<div class="fab">
+  <button class="secondary" onclick="openEvent()">+ 收入 / 支出</button>
+  <button class="primary" onclick="openDebt()">更新债务</button>
+</div>
+
+<dialog id="eventDialog">
+  <div class="modal">
+    <h3>添加现金流事项</h3>
+    <div class="fields">
+      <div class="field"><label>类型</label><select id="eventType"><option value="income">收入</option><option value="expense">计划支出</option><option value="repayment">还款</option></select></div>
+      <div class="field"><label>金额</label><input id="eventAmount" type="number" step="0.01" placeholder="1000" /></div>
+      <div class="field"><label>日期</label><input id="eventDate" type="date" /></div>
+      <div class="field"><label>名称</label><input id="eventName" placeholder="工资 / 房租 / 信用卡还款" /></div>
+      <div class="field full"><label>关联债务（可选）</label><select id="eventDebt"><option value="">无</option></select></div>
+    </div>
+    <div class="modal-actions"><button class="secondary" onclick="closeDialog('eventDialog')">取消</button><button class="primary" onclick="saveEvent()">保存</button></div>
+  </div>
+</dialog>
+
+<dialog id="debtDialog">
+  <div class="modal">
+    <h3>债务与现金更新</h3>
+    <div class="fields">
+      <div class="field full"><label>当前可用现金</label><input id="cashInput" type="number" step="0.01" /></div>
+      <div class="field"><label>债务名称</label><input id="debtName" placeholder="招商信用卡" /></div>
+      <div class="field"><label>当前欠款</label><input id="debtBalance" type="number" step="0.01" /></div>
+      <div class="field"><label>本期需还</label><input id="debtDueAmount" type="number" step="0.01" /></div>
+      <div class="field"><label>还款日</label><input id="debtDueDate" type="date" /></div>
+      <div class="field"><label>信用额度（可选）</label><input id="debtLimit" type="number" step="0.01" /></div>
+      <div class="field"><label>APR %（可选）</label><input id="debtApr" type="number" step="0.01" /></div>
+    </div>
+    <div class="hint">保存时会记录一次总负债快照，用来比较“比上次增加/减少多少”。如果债务名称已存在，会覆盖更新。</div>
+    <div class="modal-actions"><button class="secondary" onclick="closeDialog('debtDialog')">取消</button><button class="primary" onclick="saveDebt()">保存</button></div>
+  </div>
+</dialog>
+
+<script>
+const KEY='debt_pool_v1';
+let state=JSON.parse(localStorage.getItem(KEY)||'null')||{cash:0,debts:[],events:[],snapshots:[]};
+const money=n=>'¥'+Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:2});
+const today=()=>new Date(new Date().toDateString());
+const days=(d)=>Math.ceil((new Date(d+'T00:00:00')-today())/86400000);
+function persist(){localStorage.setItem(KEY,JSON.stringify(state));render();}
+function totalDebt(){return state.debts.reduce((s,d)=>s+Number(d.balance||0),0)}
+function render(){
+  document.getElementById('cash').textContent=money(state.cash);
+  const td=totalDebt(); document.getElementById('debt').textContent=money(td);
+  const prev=state.snapshots.length>1?state.snapshots[state.snapshots.length-2]:null;
+  const deltaEl=document.getElementById('debtDelta');
+  if(prev){const x=td-prev.totalDebt; deltaEl.textContent=(x<0?'↓ ':x>0?'↑ ':'')+money(Math.abs(x))+' vs 上次'; deltaEl.className='small '+(x<0?'good':x>0?'bad':'');} else {deltaEl.textContent='暂无上次快照';deltaEl.className='small';}
+
+  const now=today(), limit=new Date(now); limit.setDate(limit.getDate()+30);
+  const upcoming=state.events.filter(e=>{const d=new Date(e.date+'T00:00:00');return d>=now&&d<=limit;}).sort((a,b)=>a.date.localeCompare(b.date));
+  const inc=upcoming.filter(e=>e.type==='income').reduce((s,e)=>s+Number(e.amount),0);
+  const exp=upcoming.filter(e=>e.type!=='income').reduce((s,e)=>s+Number(e.amount),0);
+  document.getElementById('income30').textContent=money(inc); document.getElementById('expense30').textContent=money(exp);
+
+  let bal=Number(state.cash||0), min=bal, minDate='现在';
+  upcoming.forEach(e=>{bal += e.type==='income'?Number(e.amount):-Number(e.amount); if(bal<min){min=bal;minDate=e.date;}});
+  const m=document.getElementById('minCash'); m.textContent=money(min); m.className='value '+(min<0?'bad':'good');
+  document.getElementById('minCashInfo').textContent=upcoming.length?`最低点：${minDate}`:'暂无未来30天现金流事项';
+
+  const ev=document.getElementById('events'); ev.innerHTML='';
+  if(!upcoming.length) ev.innerHTML='<div class="empty">暂无未来30天事项</div>';
+  upcoming.forEach((e,i)=>{const r=document.createElement('div');r.className='row';const sign=e.type==='income'?'+':'−';const cls=e.type==='income'?'good':'bad';r.innerHTML=`<div><div class="row-main">${e.name||({income:'收入',expense:'计划支出',repayment:'还款'})[e.type]}</div><div class="row-sub">${e.date} · ${days(e.date)} 天后</div></div><div class="amt ${cls}" onclick="deleteEvent('${e.id}')">${sign}${money(e.amount)}</div>`;ev.appendChild(r)});
+
+  const db=document.getElementById('debts');db.innerHTML='';
+  if(!state.debts.length) db.innerHTML='<div class="empty">还没有债务，点“更新债务”添加</div>';
+  state.debts.slice().sort((a,b)=>(a.dueDate||'9999').localeCompare(b.dueDate||'9999')).forEach(d=>{const r=document.createElement('div');r.className='row';let sub=''; if(d.dueDate) sub+=`${d.dueDate} 还 ${money(d.dueAmount||0)}`; if(d.limit) sub+=` · 额度 ${money(d.limit)}`; r.innerHTML=`<div><div class="row-main">${d.name}</div><div class="row-sub">${sub||'未设置还款信息'}</div></div><div class="amt" onclick="editDebt('${d.id}')">${money(d.balance)}</div>`;db.appendChild(r)});
+
+  const sel=document.getElementById('eventDebt'); sel.innerHTML='<option value="">无</option>'+state.debts.map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
+}
+function openEvent(){document.getElementById('eventDate').value=new Date().toISOString().slice(0,10);document.getElementById('eventDialog').showModal();}
+function openDebt(){document.getElementById('cashInput').value=state.cash;['debtName','debtBalance','debtDueAmount','debtDueDate','debtLimit','debtApr'].forEach(id=>document.getElementById(id).value='');document.getElementById('debtDialog').dataset.edit='';document.getElementById('debtDialog').showModal();}
+function closeDialog(id){document.getElementById(id).close();}
+function saveEvent(){const amount=Number(document.getElementById('eventAmount').value);const date=document.getElementById('eventDate').value;if(!amount||!date)return alert('请填写金额和日期');state.events.push({id:crypto.randomUUID(),type:document.getElementById('eventType').value,amount,date,name:document.getElementById('eventName').value.trim(),debtId:document.getElementById('eventDebt').value});closeDialog('eventDialog');['eventAmount','eventName'].forEach(id=>document.getElementById(id).value='');persist();}
+function saveDebt(){state.cash=Number(document.getElementById('cashInput').value||0);const name=document.getElementById('debtName').value.trim();if(name){const id=document.getElementById('debtDialog').dataset.edit;let d=id?state.debts.find(x=>x.id===id):state.debts.find(x=>x.name===name);const obj={name,balance:Number(document.getElementById('debtBalance').value||0),dueAmount:Number(document.getElementById('debtDueAmount').value||0),dueDate:document.getElementById('debtDueDate').value,limit:Number(document.getElementById('debtLimit').value||0),apr:Number(document.getElementById('debtApr').value||0)};if(d)Object.assign(d,obj);else state.debts.push({id:crypto.randomUUID(),...obj});}
+state.snapshots.push({date:new Date().toISOString(),totalDebt:totalDebt(),cash:state.cash});closeDialog('debtDialog');persist();}
+function editDebt(id){const d=state.debts.find(x=>x.id===id);if(!d)return;document.getElementById('cashInput').value=state.cash;document.getElementById('debtName').value=d.name;document.getElementById('debtBalance').value=d.balance;document.getElementById('debtDueAmount').value=d.dueAmount||'';document.getElementById('debtDueDate').value=d.dueDate||'';document.getElementById('debtLimit').value=d.limit||'';document.getElementById('debtApr').value=d.apr||'';document.getElementById('debtDialog').dataset.edit=id;document.getElementById('debtDialog').showModal();}
+function deleteEvent(id){if(confirm('删除这条事项？')){state.events=state.events.filter(e=>e.id!==id);persist();}}
+render();
+</script>
+</body>
+</html>
