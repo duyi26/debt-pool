@@ -83,12 +83,14 @@ textarea{min-height:130px;font-size:12px}.actions{display:flex;gap:8px;margin-to
 <div class="field"><label>账户类型</label><select id="atype"><option value="revolving">循环消费账户</option><option value="loan">大额贷款</option></select></div>
 <div class="field"><label>账户名称</label><input id="aname" type="text" placeholder="招行信用卡 / 花呗 / 白条 / 创业贷"></div>
 <div class="field"><label>当前负债</label><input id="abalance" type="number" inputmode="decimal"></div>
-<div class="field"><label>本期应还</label><input id="adue" type="number" inputmode="decimal"></div>
-<div class="field"><label>还款日</label><input id="adate" type="date"></div>
+<div class="field"><label>每月应还 / 最低还款额</label><input id="adue" type="number" inputmode="decimal"></div>
+<div class="field"><label>每月还款日</label><input id="adueday" type="number" min="1" max="31" inputmode="numeric" placeholder="例如 20"></div>
+<div class="field"><label>还款截止日期（可空）</label><input id="aend" type="date"></div>
+<div class="field"><label>最低还款比例 %（可选估算）</label><input id="aminpct" type="number" min="0" max="100" step="0.1" inputmode="decimal" placeholder="例如 10"></div>
 <div class="field"><label>总额度（循环账户）</label><input id="alimit" type="number" inputmode="decimal"></div>
 <div class="field"><label>预留不可消费额度</label><input id="areserve" type="number" inputmode="decimal" value="0"></div>
 </div>
-<div class="meta" style="margin-top:8px">可消费额度 = 总额度 − 当前负债 − 预留不可消费额度。</div>
+<div class="meta" style="margin-top:8px">循环账户可直接填写银行账单给出的最低还款额；若留空而填写“最低还款比例”，系统会用 当前负债 × 比例 做估算。大额贷款填写每月固定应还额即可。每月还款日会自动展开到未来月份。</div>
 <div class="actions"><button data-close="accountOverlay">取消</button><button class="dark" id="saveAccountBtn">保存</button></div>
 </div></div>
 
@@ -118,10 +120,10 @@ textarea{min-height:130px;font-size:12px}.actions{display:flex;gap:8px;margin-to
 
 <script>
 "use strict";
-var KEY="debt_pool_v24";
+var KEY="debt_pool_v25";
 function byId(id){return document.getElementById(id)}
 function safeParse(k){try{return JSON.parse(localStorage.getItem(k)||"null")}catch(e){return null}}
-var migrated=safeParse("debt_pool_v23")||safeParse("debt_pool_v2_fixed")||safeParse("debt_pool_v2")||safeParse("debt_pool_v1")||{};
+var migrated=safeParse("debt_pool_v24")||safeParse("debt_pool_v23")||safeParse("debt_pool_v2_fixed")||safeParse("debt_pool_v2")||safeParse("debt_pool_v1")||{};
 var state=safeParse(KEY)||{
   cash:Number(migrated.cash||0),
   accounts:Array.isArray(migrated.accounts)?migrated.accounts.map(function(a){var c=Object.assign({},a);if(c.type==="debt")c.type="loan";return c}):(Array.isArray(migrated.debts)?migrated.debts.map(function(a){return Object.assign({},a,{type:"loan"})}):[]),
@@ -199,20 +201,45 @@ function render(){
   byId("availableCreditTop").textContent=money(totalAvailableCredit());
   renderMonthMonitor();renderThreeMonth();renderAccounts("revolving","revolvingList");renderAccounts("loan","loanList");renderRecurringList()
 }
+function accountDues(start,end){
+  var out=[];
+  state.accounts.forEach(function(a){
+    var day=Number(a.dueDay||0);
+    if(!day && a.dueDate){
+      var legacy=parseDate(a.dueDate); day=legacy.getDate();
+      if(!a.repayStart)a.repayStart=a.dueDate;
+    }
+    if(!day)return;
+    var rs=a.repayStart?parseDate(a.repayStart):monthStart(start);
+    var re=a.repayEnd?parseDate(a.repayEnd):end;
+    if(re>end)re=end;
+    for(var cur=monthStart(start);cur<=monthStart(end);cur=new Date(cur.getFullYear(),cur.getMonth()+1,1)){
+      var last=monthEnd(cur).getDate();
+      var d=new Date(cur.getFullYear(),cur.getMonth(),Math.min(day,last));
+      if(d<start||d>end||d<rs||d>re)continue;
+      var amt=Number(a.dueAmount||0);
+      if(!amt && a.type==="revolving" && Number(a.minPct||0)>0){
+        amt=Number(a.balance||0)*Number(a.minPct||0)/100;
+      }
+      if(amt>0)out.push({type:"repayment",name:a.name,amount:amt,date:iso(d),accountId:a.id});
+    }
+  });
+  return out.sort(function(x,y){return x.date.localeCompare(y.date)})
+}
 function renderMonthMonitor(){
   var now=today(),ms=monthStart(now),me=monthEnd(now),ev=forecast(ms,me);
   var incomes=ev.filter(function(e){return e.type==="income"});
-  var dues=state.accounts.filter(function(a){return a.dueDate&&inRange(parseDate(a.dueDate),ms,me)});
+  var dues=accountDues(ms,me);
   var repayments=ev.filter(function(e){return e.type==="repayment"});
   var inc=incomes.reduce(function(s,e){return s+Number(e.amount)},0);
-  var due=dues.reduce(function(s,a){return s+Number(a.dueAmount||0)},0)+repayments.reduce(function(s,e){return s+Number(e.amount)},0);
+  var due=dues.reduce(function(s,a){return s+Number(a.amount||0)},0)+repayments.reduce(function(s,e){return s+Number(e.amount)},0);
   byId("monthCash").textContent=money(state.cash);byId("monthIncomeTotal").textContent=money(inc);byId("monthDueTotal").textContent=money(due);
   var il=byId("monthIncomeList");il.innerHTML="";
   if(!incomes.length)il.innerHTML='<div class="empty">本月暂无收入</div>';
   incomes.forEach(function(e){il.appendChild(rowNode(e.name,e.date,"+"+money(e.amount),"green"))});
   var dl=byId("monthDueList");dl.innerHTML="";
   if(!dues.length&&!repayments.length)dl.innerHTML='<div class="empty">本月暂无还款</div>';
-  dues.sort(function(a,b){return a.dueDate.localeCompare(b.dueDate)}).forEach(function(a){dl.appendChild(rowNode(a.name,a.dueDate,"−"+money(a.dueAmount),"red"))});
+  dues.forEach(function(a){dl.appendChild(rowNode(a.name,a.date,"−"+money(a.amount),"red"))});
   repayments.forEach(function(e){dl.appendChild(rowNode(e.name,e.date,"−"+money(e.amount),"red"))});
   var after=Number(state.cash)+inc-due,el=byId("monthAfter");el.textContent=money(after);el.className="val "+(after<0?"red":"green")
 }
@@ -220,7 +247,7 @@ function renderThreeMonth(){
   var box=byId("threeMonth");box.innerHTML="";var now=today(),running=Number(state.cash);
   for(var i=0;i<3;i++){
     var d=new Date(now.getFullYear(),now.getMonth()+i,1),ms=monthStart(d),me=monthEnd(d),ev=forecast(ms,me);
-    var dues=state.accounts.filter(function(a){return a.dueDate&&inRange(parseDate(a.dueDate),ms,me)}).map(function(a){return {type:"repayment",name:a.name,amount:Number(a.dueAmount||0),date:a.dueDate}});
+    var dues=accountDues(ms,me);
     var combined=ev.concat(dues).sort(function(a,b){return a.date.localeCompare(b.date)});
     var inc=combined.filter(function(e){return e.type==="income"}).reduce(function(s,e){return s+Number(e.amount)},0);
     var out=combined.filter(function(e){return e.type!=="income"}).reduce(function(s,e){return s+Number(e.amount)},0);
@@ -244,7 +271,7 @@ function renderAccounts(type,target){
     var top=document.createElement("div");top.className="accountTop";
     var left=document.createElement("div");
     var nm=document.createElement("div");nm.className="name";nm.textContent=a.name;
-    var meta=document.createElement("div");meta.className="meta";meta.textContent=a.dueDate?"还款 "+a.dueDate:"未设置还款日";
+    var meta=document.createElement("div");meta.className="meta";meta.textContent=a.dueDay?("每月 "+a.dueDay+" 日还款"+(a.repayEnd?" · 至 "+a.repayEnd:"")):(a.dueDate?"每月 "+parseDate(a.dueDate).getDate()+" 日还款":"未设置还款日");
     left.appendChild(nm);left.appendChild(meta);
     var edit=document.createElement("button");edit.textContent="编辑";edit.addEventListener("click",function(){editAccount(a.id)});
     top.appendChild(left);top.appendChild(edit);c.appendChild(top);
@@ -258,11 +285,11 @@ function renderAccounts(type,target){
 function clearAccountForm(){
   byId("accountOverlay").dataset.edit="";
   byId("cashEdit").value=state.cash;byId("atype").value="revolving";
-  ["aname","abalance","adue","adate","alimit","areserve"].forEach(function(x){byId(x).value=""})
+  ["aname","abalance","adue","adueday","aend","aminpct","alimit","areserve"].forEach(function(x){byId(x).value=""})
 }
 function editAccount(id){
   var a=state.accounts.find(function(x){return x.id===id});if(!a)return;
-  byId("accountOverlay").dataset.edit=id;byId("cashEdit").value=state.cash;byId("atype").value=a.type;byId("aname").value=a.name;byId("abalance").value=a.balance||0;byId("adue").value=a.dueAmount||0;byId("adate").value=a.dueDate||"";byId("alimit").value=a.limit||0;byId("areserve").value=a.reserve||0;openOverlay("accountOverlay")
+  byId("accountOverlay").dataset.edit=id;byId("cashEdit").value=state.cash;byId("atype").value=a.type;byId("aname").value=a.name;byId("abalance").value=a.balance||0;byId("adue").value=a.dueAmount||0;byId("adueday").value=a.dueDay||(a.dueDate?parseDate(a.dueDate).getDate():"");byId("aend").value=a.repayEnd||"";byId("aminpct").value=a.minPct||"";byId("alimit").value=a.limit||0;byId("areserve").value=a.reserve||0;openOverlay("accountOverlay")
 }
 function renderRecurringList(){
   var box=byId("recurringList");if(!box)return;box.innerHTML="";
@@ -276,7 +303,7 @@ function renderRecurringList(){
     row.appendChild(left);row.appendChild(del);box.appendChild(row)
   })
 }
-function payload(){return {app:"Debt Pool",version:"2.4",exportedAt:new Date().toISOString(),state:state}}
+function payload(){return {app:"Debt Pool",version:"2.5",exportedAt:new Date().toISOString(),state:state}}
 function makeBackupText(){byId("backupText").value=JSON.stringify(payload(),null,2)}
 function copyBackupText(){
   if(!byId("backupText").value)makeBackupText();
@@ -289,7 +316,7 @@ function restoreBackupText(){
 }
 function exportBackup(){
   var blob=new Blob([JSON.stringify(payload(),null,2)],{type:"application/json"}),u=URL.createObjectURL(blob),a=document.createElement("a");
-  a.href=u;a.download="debt-pool-v24-"+iso(today())+".json";document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(u)},1000)
+  a.href=u;a.download="debt-pool-v25-"+iso(today())+".json";document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(u)},1000)
 }
 function importBackup(file){
   if(!file)return;var rd=new FileReader();
@@ -310,7 +337,7 @@ byId("saveEventBtn").addEventListener("click",function(){
 byId("saveAccountBtn").addEventListener("click",function(){
   state.cash=Number(byId("cashEdit").value||0);var name=byId("aname").value.trim();
   if(name){
-    var obj={type:byId("atype").value,name:name,balance:Number(byId("abalance").value||0),dueAmount:Number(byId("adue").value||0),dueDate:byId("adate").value,limit:Number(byId("alimit").value||0),reserve:Number(byId("areserve").value||0)};
+    var obj={type:byId("atype").value,name:name,balance:Number(byId("abalance").value||0),dueAmount:Number(byId("adue").value||0),dueDay:Number(byId("adueday").value||0),repayStart:iso(today()),repayEnd:byId("aend").value,minPct:Number(byId("aminpct").value||0),limit:Number(byId("alimit").value||0),reserve:Number(byId("areserve").value||0)};
     var id=byId("accountOverlay").dataset.edit;
     if(id){var a=state.accounts.find(function(x){return x.id===id});if(a)Object.assign(a,obj)}
     else{obj.id=uid();state.accounts.push(obj)}
